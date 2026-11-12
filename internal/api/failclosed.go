@@ -62,6 +62,14 @@ var openWrites = []openWrite{
 	{http.MethodPost, "/organizations/{org}/environments/",
 		"cookbook-version solving: a read that uses POST to carry a run list in a body, " +
 			"returning only cookbook metadata the caller could read directly"},
+	{http.MethodPost, "/organizations/{org}/data-collector",
+		"forwards the request to the configured downstream data-collector service; " +
+			"real Chef Infra Server does not check an object ACL here either, only " +
+			"that the request is signed"},
+	{http.MethodPost, "/data-collector",
+		"unauthenticated by design when enabled (mirrors data_collector['proxy']): " +
+			"the request never carries a Mixlib signature, so no actor ever reaches " +
+			"the authorization layer for this path"},
 }
 
 // openWriteReason returns why a mutating route is deliberately unchecked, or ""

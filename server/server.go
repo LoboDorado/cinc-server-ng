@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -110,6 +111,29 @@ type Options struct {
 	// embedding tests inject a specific store.Backend (e.g. a shared in-memory
 	// SQLite DB).
 	Backend store.Backend
+	// DataCollectorURL is the downstream data-collector service endpoint that
+	// POST /organizations/{org}/data-collector (and, when DataCollectorOpenProxy
+	// is set, POST /data-collector) forwards requests to, mirroring Chef Infra
+	// Server's data_collector['root_url'] reverse proxy. Leave it empty (the
+	// default) to leave both routes unregistered.
+	DataCollectorURL string
+	// DataCollectorToken is the pre-shared credential the signed, org-scoped
+	// route injects as the X-Data-Collector-Token header on every forwarded
+	// request (data_collector['token']). The unauthenticated open-proxy route
+	// never injects it; see DataCollectorOpenProxy.
+	DataCollectorToken string
+	// DataCollectorOpenProxy additionally registers POST /data-collector: no
+	// org, no Mixlib signature required, every request relayed to
+	// DataCollectorURL byte-for-byte (headers included), exactly as the
+	// client sent it. Mirrors Chef Infra Server's data_collector['proxy'] =
+	// true, which exists because some compliance-scan reporters cannot sign a
+	// Mixlib request. Off by default: enabling it means anyone who can reach
+	// this port can use it to relay arbitrary POSTs to DataCollectorURL.
+	DataCollectorOpenProxy bool
+	// DataCollectorTimeout bounds how long the server waits for the
+	// downstream data-collector service before failing the proxied request
+	// with 502 (data_collector['timeout']). Defaults to 30s.
+	DataCollectorTimeout time.Duration
 }
 
 func (o *Options) withDefaults() {
@@ -136,6 +160,9 @@ func (o *Options) withDefaults() {
 	}
 	if o.MaxBodyBytes == 0 {
 		o.MaxBodyBytes = 1 << 30 // 1 GiB
+	}
+	if o.DataCollectorTimeout == 0 {
+		o.DataCollectorTimeout = 30 * time.Second
 	}
 }
 
@@ -287,6 +314,11 @@ func New(opts Options) (*Server, error) {
 			return nil, err
 		}
 		opts.ExternalURL = base
+	}
+	if opts.DataCollectorURL != "" {
+		if u, err := url.Parse(opts.DataCollectorURL); err != nil || u.Scheme == "" || u.Host == "" {
+			return nil, fmt.Errorf("data collector URL %q: must be an absolute http(s) URL", opts.DataCollectorURL)
+		}
 	}
 	var certs *certLoader
 	if opts.TLSCertFile != "" || opts.TLSKeyFile != "" {
@@ -463,6 +495,7 @@ func New(opts Options) (*Server, error) {
 		api.WithFileStoreKey(fileStoreKey),
 		api.WithClock(opts.Now),
 		api.WithExternalURL(opts.ExternalURL),
+		api.WithDataCollector(opts.DataCollectorURL, opts.DataCollectorToken, opts.DataCollectorOpenProxy, opts.DataCollectorTimeout),
 	)
 	s.api = apiInstance
 	handler := apiInstance.Handler()

@@ -312,6 +312,42 @@ authorization indexes live in the process.
 **[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)** has nginx, Caddy, AWS and
 Docker setups and the details that matter behind a proxy.
 
+## Data collector
+
+cinc-server-ng can reverse-proxy chef-client and compliance-scan reports to a
+downstream data-collector service (a system that stores converge history and
+compliance scan results, such as Cinc Collector), the same way Chef Infra
+Server's `data_collector` configuration does. cinc-server-ng never stores
+this data itself: it only forwards it.
+
+```sh
+./cinc-server-ng --data-collector-url https://collector.example.com/data-collector/v0 \
+  --data-collector-token "$COLLECTOR_TOKEN"
+```
+
+Point `chef-client` at it in `client.rb`:
+
+```ruby
+data_collector.server_url "https://<your server>/organizations/<org>/data-collector"
+```
+
+`POST /organizations/{org}/data-collector` requires the same signed request as
+every other org route, and the configured token is attached as
+`X-Data-Collector-Token` before the request is forwarded, so individual nodes
+never need to know it.
+
+Some compliance-scan reporters (notably InSpec's own, run outside of a
+`chef-client` converge) cannot sign a request at all. `--data-collector-open-proxy`
+additionally serves `POST /data-collector`: no organization, no signature,
+every request relayed byte-for-byte, headers included, with nothing injected.
+It is off by default, since enabling it means anyone who can reach this port
+can use it to relay arbitrary POSTs to `--data-collector-url`; turn it on only
+when a reporter that cannot sign requests needs it, and keep the endpoint
+reachable only from where that reporter runs.
+
+`--data-collector-timeout` (default 30s) bounds how long a proxied request
+waits before failing with 502, the same default Chef Infra Server uses.
+
 ## Compatibility with Chef Infra Server
 
 Fidelity is the point of this project, so it is tested three ways, each

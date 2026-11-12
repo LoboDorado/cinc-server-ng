@@ -55,6 +55,10 @@ type API struct {
 	// membership orders group-membership changes against revocations; see
 	// groupmembers.go.
 	membership sync.RWMutex
+	// dataCollector holds the configuration and reverse proxies for the
+	// data-collector routes (see data_collector.go). Nil fields/proxies mean
+	// the corresponding route is not registered.
+	dataCollector dataCollectorConfig
 }
 
 // Option configures an API at construction time.
@@ -87,6 +91,21 @@ func WithClock(now func() time.Time) Option {
 		if now != nil {
 			a.now = now
 		}
+	}
+}
+
+// WithDataCollector configures the data-collector reverse proxy: url is the
+// downstream data-collector service endpoint (mirrors Chef Infra Server's
+// data_collector['root_url']); token is the pre-shared credential injected as
+// X-Data-Collector-Token on every request forwarded by the signed,
+// org-scoped route (data_collector['token']); openProxy additionally
+// registers an unauthenticated, non-org route that relays requests verbatim,
+// with no token injected (data_collector['proxy']); timeout bounds how long
+// the server waits for the downstream service before failing with 502
+// (data_collector['timeout']). An empty url leaves both routes unregistered.
+func WithDataCollector(url, token string, openProxy bool, timeout time.Duration) Option {
+	return func(a *API) {
+		a.dataCollector = newDataCollectorConfig(url, token, openProxy, timeout)
 	}
 }
 
@@ -139,6 +158,7 @@ func (a *API) Handler() http.Handler {
 	a.registerOrganizationRoutes(mux)
 	a.registerAuthzRoutes(mux)
 	a.registerServerEndpoints(mux)
+	a.registerDataCollectorRoutes(mux)
 
 	a.routes = mux.patterns
 

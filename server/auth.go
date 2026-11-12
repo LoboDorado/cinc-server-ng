@@ -26,6 +26,19 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// The unauthenticated data-collector relay, when enabled, carries no
+		// Mixlib signature at all — some compliance-scan reporters cannot
+		// sign a request, so the operator traded that away on purpose
+		// (DataCollectorOpenProxy). Unlike the paths above, this exemption is
+		// config-dependent rather than fixed, so it cannot live in the static
+		// api.SystemPaths map. When the option is off, POST /data-collector
+		// is not even registered (see api.WithDataCollector), so this branch
+		// is simply never reached.
+		if s.opts.DataCollectorOpenProxy && r.URL.Path == "/data-collector" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		// /_stats takes HTTP Basic credentials instead of a signature, as
 		// Chef Infra Server's nginx demands (see stats_auth.go).
 		if r.URL.Path == statsPath {

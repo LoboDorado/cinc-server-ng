@@ -55,6 +55,11 @@ type cliFlags struct {
 	externalURL     string
 	shutdownDelay   time.Duration
 	shutdownTimeout time.Duration
+
+	dataCollectorURL       string
+	dataCollectorToken     string
+	dataCollectorOpenProxy bool
+	dataCollectorTimeout   time.Duration
 }
 
 // hiddenFlags are registered and functional but omitted from usage/help output
@@ -91,6 +96,13 @@ func parseFlags(args []string, out io.Writer) (*cliFlags, error) {
 	fs.DurationVar(&f.shutdownDelay, "shutdown-delay", 0, "on SIGTERM/SIGINT, fail /_status with 503 and keep serving for this long before stopping, so a load balancer drains this instance first (a second signal skips the wait)")
 	fs.DurationVar(&f.shutdownTimeout, "shutdown-timeout", 30*time.Second, "how long to wait for in-flight requests when stopping before cutting them off")
 	fs.BoolVar(&f.initOnly, "init", false, "seed the store (bootstrap plus any configured seed) and exit without serving; use to pre-bake a SQLite database")
+	fs.StringVar(&f.dataCollectorURL, "data-collector-url", os.Getenv("CINC_SERVER_NG_DATA_COLLECTOR_URL"), "downstream data-collector service endpoint that POST /organizations/{org}/data-collector forwards requests to; leave unset to disable the data collector routes")
+	// The flag default stays empty so a configured token never appears in
+	// --help; the environment is applied after parsing instead, as with
+	// --stats-password.
+	fs.StringVar(&f.dataCollectorToken, "data-collector-token", "", "pre-shared token forwarded as X-Data-Collector-Token on the signed data-collector route (or CINC_SERVER_NG_DATA_COLLECTOR_TOKEN, which keeps it off the command line)")
+	fs.BoolVar(&f.dataCollectorOpenProxy, "data-collector-open-proxy", false, "also serve POST /data-collector: unauthenticated, no org, relays requests verbatim to --data-collector-url (needed for reporters that cannot sign a request); anyone who can reach this port can use it, so it is off by default")
+	fs.DurationVar(&f.dataCollectorTimeout, "data-collector-timeout", 30*time.Second, "how long to wait for the data collector endpoint before failing a proxied request with 502")
 
 	fs.Usage = func() {
 		fmt.Fprintf(out, "Usage of cinc-server-ng:\n")
@@ -119,6 +131,9 @@ func parseFlags(args []string, out io.Writer) (*cliFlags, error) {
 	})
 	if f.statsPassword == "" {
 		f.statsPassword = os.Getenv("CINC_SERVER_NG_STATS_PASSWORD")
+	}
+	if f.dataCollectorToken == "" {
+		f.dataCollectorToken = os.Getenv("CINC_SERVER_NG_DATA_COLLECTOR_TOKEN")
 	}
 	return &f, nil
 }
@@ -181,6 +196,11 @@ func run(args []string, out io.Writer) error {
 		ExternalURL: f.externalURL,
 		TLSCertFile: f.tlsCert,
 		TLSKeyFile:  f.tlsKey,
+
+		DataCollectorURL:       f.dataCollectorURL,
+		DataCollectorToken:     f.dataCollectorToken,
+		DataCollectorOpenProxy: f.dataCollectorOpenProxy,
+		DataCollectorTimeout:   f.dataCollectorTimeout,
 	})
 	if err != nil {
 		return err
@@ -234,6 +254,13 @@ func run(args []string, out io.Writer) error {
 
 	if f.externalURL != "" {
 		fmt.Fprintf(out, "  external url: %s\n", f.externalURL)
+	}
+
+	if f.dataCollectorURL != "" {
+		fmt.Fprintf(out, "  data collector: forwarding to %s\n", f.dataCollectorURL)
+		if f.dataCollectorOpenProxy {
+			fmt.Fprintln(out, "  data collector: unauthenticated open proxy enabled at /data-collector")
+		}
 	}
 
 	sigs := make(chan os.Signal, 2)
