@@ -99,7 +99,7 @@ func TestActorGroupsCycleTerminates(t *testing.T) {
 func TestActorAllowedDirectActor(t *testing.T) {
 	org := testOrg(t)
 	if err := org.Put("acls", aclKey("nodes", "web01"), mustEncode(map[string]any{
-		"read": map[string]any{"actors": []string{"alice"}, "groups": []string{}},
+		"read": map[string]any{"users": []string{"alice"}, "groups": []string{}},
 	})); err != nil {
 		t.Fatal(err)
 	}
@@ -190,13 +190,14 @@ func TestClassifyRequest(t *testing.T) {
 		// Cookbook pseudo-endpoints fall back to the container.
 		{"GET", "/organizations/acme/cookbooks/_latest", &authzCheck{aclType: "containers", aclName: "cookbooks", perm: "read"}},
 		{"PUT", "/organizations/acme/cookbook_artifacts/foo/abc123", &authzCheck{aclType: "cookbook_artifacts", aclName: "foo", perm: "update"}},
-		// Global users collection: superuser-only (list/create).
-		{"GET", "/users", &authzCheck{superuserOnly: true, perm: "read"}},
-		{"POST", "/users", &authzCheck{superuserOnly: true, perm: "create"}},
-		// Global single user: superuser-only, but the user may act on itself.
-		{"GET", "/users/bob", &authzCheck{superuserOnly: true, perm: "read", allowSelf: "bob"}},
-		{"PUT", "/users/bob", &authzCheck{superuserOnly: true, perm: "update", allowSelf: "bob"}},
-		{"DELETE", "/users/bob", &authzCheck{superuserOnly: true, perm: "delete", allowSelf: "bob"}},
+		// Global users collection: the superuser and server-admins (list/create).
+		{"GET", "/users", &authzCheck{superuserOnly: true, perm: "read", serverAdmins: true}},
+		{"POST", "/users", &authzCheck{superuserOnly: true, perm: "create", serverAdmins: true}},
+		// Global single user: the superuser and server-admins (unless the
+		// target is a superuser), and the user may act on itself.
+		{"GET", "/users/bob", &authzCheck{superuserOnly: true, perm: "read", allowSelf: "bob", serverAdmins: true, serverAdminTarget: "bob"}},
+		{"PUT", "/users/bob", &authzCheck{superuserOnly: true, perm: "update", allowSelf: "bob", serverAdmins: true, serverAdminTarget: "bob"}},
+		{"DELETE", "/users/bob", &authzCheck{superuserOnly: true, perm: "delete", allowSelf: "bob", serverAdmins: true, serverAdminTarget: "bob"}},
 		// Global user ACLs: grant on the user object, evaluated in the global space.
 		{"GET", "/users/bob/_acl", &authzCheck{global: true, aclType: "users", aclName: "bob", perm: "grant", aclEndpoint: true}},
 		{"PUT", "/users/bob/_acl/grant", &authzCheck{global: true, aclType: "users", aclName: "bob", perm: "grant", aclEndpoint: true}},
@@ -204,9 +205,16 @@ func TestClassifyRequest(t *testing.T) {
 		// authz_gaps_test.go for the rest of the membership routes).
 		{"POST", "/organizations/acme/users", &authzCheck{superuserOnly: true, perm: "create"}},
 		// An actor's keys are its credential, so they are gated like the actor.
-		{"GET", "/users/bob/keys", &authzCheck{superuserOnly: true, perm: "read", allowSelf: "bob"}},
+		{"GET", "/users/bob/keys", &authzCheck{superuserOnly: true, perm: "read", allowSelf: "bob", serverAdmins: true, serverAdminTarget: "bob"}},
 		// Provisioning an org is server-level; listing them stays open.
 		{"POST", "/organizations", &authzCheck{superuserOnly: true, perm: "create"}},
+		// cinc-server-ng's own administration routes are the superuser's
+		// alone, reads included (server-admins membership names who manages
+		// every account).
+		{"GET", "/_cinc/server_admins", &authzCheck{superuserOnly: true, perm: "read"}},
+		{"PUT", "/_cinc/server_admins/bob", &authzCheck{superuserOnly: true, perm: "update"}},
+		{"DELETE", "/_cinc/server_admins/bob", &authzCheck{superuserOnly: true, perm: "delete"}},
+		{"POST", "/_cinc/anything", &authzCheck{superuserOnly: true, perm: "update"}},
 		// Policy sub-resources collapse onto the policy object's ACL.
 		{"GET", "/organizations/acme/policies/app/revisions/1.0.0", &authzCheck{aclType: "policies", aclName: "app", perm: "read"}},
 		// Unclassified: allow-through (no ACL restrictions or out of scope).
@@ -412,7 +420,7 @@ func TestEnforceGroupsAndContainers(t *testing.T) {
 
 	// A normal user granted update on the group's ACL may PUT it.
 	if err := org.Put("acls", aclKey("groups", "grp1"), mustEncode(map[string]any{
-		"update": map[string]any{"actors": []string{"editor"}, "groups": []string{}},
+		"update": map[string]any{"users": []string{"editor"}, "groups": []string{}},
 	})); err != nil {
 		t.Fatal(err)
 	}
@@ -495,7 +503,7 @@ func TestEnforceUserACL(t *testing.T) {
 
 	// Grant "granter" the grant permission on bob's user object (global space).
 	if err := st.Global().Put("acls", aclKey("users", "bob"), mustEncode(map[string]any{
-		"grant": map[string]any{"actors": []string{"granter"}, "groups": []string{}},
+		"grant": map[string]any{"users": []string{"granter"}, "groups": []string{}},
 	})); err != nil {
 		t.Fatal(err)
 	}
@@ -517,7 +525,7 @@ func TestEnforceOrgACL(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := org.Put("acls", aclKey("organizations", "acme"), mustEncode(map[string]any{
-		"grant": map[string]any{"actors": []string{"granter"}, "groups": []string{}},
+		"grant": map[string]any{"users": []string{"granter"}, "groups": []string{}},
 	})); err != nil {
 		t.Fatal(err)
 	}

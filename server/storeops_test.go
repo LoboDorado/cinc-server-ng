@@ -28,9 +28,9 @@ func (c *countingBackend) Get(org, coll, key string) ([]byte, bool, error) {
 	return c.Backend.Get(org, coll, key)
 }
 
-func (c *countingBackend) Put(org, coll, key string, val []byte) error {
+func (c *countingBackend) Put(org, coll, key string, val []byte, st store.Stamp) error {
 	c.puts.Add(1)
-	return c.Backend.Put(org, coll, key, val)
+	return c.Backend.Put(org, coll, key, val, st)
 }
 
 func (c *countingBackend) Range(org, coll string, fn func(string, []byte) bool) error {
@@ -72,7 +72,7 @@ func TestCheckinStoreOpCount(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := org.Put("acls", "nodes/node0", []byte(
-		`{"read":{"actors":["node0"],"groups":[]},"update":{"actors":["node0"],"groups":[]}}`)); err != nil {
+		`{"read":{"users":[],"clients":["node0"],"groups":[]},"update":{"users":[],"clients":["node0"],"groups":[]}}`)); err != nil {
 		t.Fatal(err)
 	}
 	url := srv.URL() + "/organizations/acme/nodes/node0"

@@ -242,6 +242,7 @@ type Server struct {
 	adminKey      []byte            // PEM-encoded admin private key
 	validatorKeys map[string][]byte // org name -> PEM-encoded validator private key
 	keyCache      *auth.PublicKeyCache
+	users         *userNames     // global user names, for resolveAuth
 	webuiPub      *rsa.PublicKey // verifies X-Ops-Request-Source: web requests
 	fileStoreKey  []byte         // signs/verifies pre-signed cookbook file-store URLs
 	api           *api.API
@@ -266,6 +267,32 @@ func upgradeOrgACLs(st *store.Store) error {
 		}
 		if err := api.UpgradeOrgACLs(org); err != nil {
 			return fmt.Errorf("upgrade org %q ACLs: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// upgradeACLActors types the ACL entries of the global space and every org
+// (see api.UpgradeACLActors). On a store with none to convert it reads each
+// acls collection once and writes nothing.
+func upgradeACLActors(st *store.Store) error {
+	if err := api.UpgradeACLActors(st.Global(), nil); err != nil {
+		return fmt.Errorf("upgrade user ACLs: %w", err)
+	}
+	names, err := st.ListOrgs()
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		org, ok, err := st.Org(name)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			continue
+		}
+		if err := api.UpgradeACLActors(st.Global(), org); err != nil {
+			return fmt.Errorf("upgrade org %q ACL actors: %w", name, err)
 		}
 	}
 	return nil
@@ -330,6 +357,10 @@ func New(opts Options) (*Server, error) {
 	st, err := buildStore(opts)
 	if err != nil {
 		return nil, err
+	}
+	if opts.Now != nil {
+		// Writes are stamped on the server's clock (store.Meta), the one tests pin.
+		st.SetClock(opts.Now)
 	}
 
 	// Bootstrap (or, against a durable backend that already holds state, reload)
@@ -431,6 +462,13 @@ func New(opts Options) (*Server, error) {
 		return nil, err
 	}
 
+	// Versions before typed ACL entries stored one untyped actors list per
+	// entry. It is converted before anything can create a client named like a
+	// user (see api.UpgradeACLActors).
+	if err := upgradeACLActors(st); err != nil {
+		return nil, err
+	}
+
 	// Versions before password hashing stored passwords as plain text.
 	if err := upgradePasswords(st); err != nil {
 		return nil, err
@@ -480,7 +518,12 @@ func New(opts Options) (*Server, error) {
 		}
 	}
 
+	users, err := newUserNames(st)
+	if err != nil {
+		return nil, fmt.Errorf("list users: %w", err)
+	}
 	s := &Server{
+		users:         users,
 		opts:          opts,
 		store:         st,
 		adminKey:      auth.EncodePrivateKeyPEM(adminPriv),

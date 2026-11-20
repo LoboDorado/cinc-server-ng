@@ -106,10 +106,28 @@ erchef's path), and the global actor endpoints: the
 `/users` collection is superuser-only (a user may still read or update its own
 record), and `/users/<name>/_acl` is governed by the grant permission on that
 user. The bootstrap admin is a superuser and bypasses ACLs, mirroring Chef's
-`pivotal`. `EnforceACL` requires authentication and cannot be combined with
+`pivotal`.
+
+Members of the global `server-admins` group hold what Chef Infra Server grants
+it: they may list and create users, and read, update and delete any user that
+is not a superuser, including its keys. They get nothing more: no user `_acl`
+access, no organization access, and no way to set a user's superuser flag.
+Chef manages membership with `chef-server-ctl grant-server-admin-permissions`;
+here the superuser uses `/_cinc/server_admins`, a cinc-server-ng route with no
+Chef equivalent (for example `knife raw -m PUT /_cinc/server_admins/alice`).
+`GET` lists the members (superusers included), `PUT /<user>` adds one and
+`DELETE /<user>` removes one. Deleting a user also removes it from the group. `EnforceACL` requires authentication and cannot be combined with
 `DisableAuth`. Whether or not ACLs are enforced, an authenticated actor other
 than the superuser cannot take the `admins` group off a grant ACE that lists
 it: the write is refused with `403`, as erchef refuses it.
+As in erchef, `GET .../_acl?detail=granular` reports each permission's actors
+split into `users` and `clients`, and `PUT .../_acl/<perm>` accepts that split
+form (with `actors` set to `[]`). An org client and a user may share a name,
+as on Chef Infra Server (a node's hostname often matches a username). They are
+separate actors: a request authenticates as whichever one's key verifies, a
+grant to one never applies to the other, and a merged-form `PUT` naming a client
+that is also a member user is refused with `422` until the split form says which.
+ACLs stored by older versions are converted to this typed form at startup.
 
 ## Use as a binary
 
@@ -174,6 +192,12 @@ The storage layer is pluggable behind a small `store.Backend` interface
 (`(org, collection, key) → bytes` plus a blob store), so PostgreSQL/RDS can be
 added later as a driver swap rather than a rewrite.
 
+**Object times.** As Chef Infra Server does, every object records when it was
+created and last changed, and which user or client changed it last. These are
+kept beside the object, not in it, so the documents clients read and write back
+are unchanged. The API does not return them yet. Objects stored before an upgrade
+to this version have no recorded creation time.
+
 **Restarts.** A SQLite-backed server is safe to stop and restart on the same
 database: it reloads existing organizations and data instead of recreating them,
 and the bootstrap admin/validator keys are persisted so the key written by
@@ -227,7 +251,14 @@ curl -s -u "statsuser:$STATS_PASSWORD" .../_stats
 
 # Prometheus text exposition, for a scraper
 curl -s -u "statsuser:$STATS_PASSWORD" -H 'Accept: text/plain' .../_stats
+curl -s -u "statsuser:$STATS_PASSWORD" '.../_stats?format=text'
 ```
+
+The JSON is Chef Infra Server's shape, so a client written for it decodes it
+unchanged: every number is a string, `labels` is an object (left out when a
+metric has none), and a histogram's `sample_sum`, `sample_count` and `bucket`
+list sit on its metric. `?format=json` or `?format=text` overrides `Accept`, and
+any other `format` is a 406.
 
 The user defaults to `statsuser`, Chef Infra Server's, and is set with
 `--stats-user` (or `CINC_SERVER_NG_STATS_USER`). Set the password with
